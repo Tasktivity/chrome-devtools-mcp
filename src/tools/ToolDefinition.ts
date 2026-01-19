@@ -24,6 +24,7 @@ export interface ToolDefinition<
      * If true, the tool does not modify its environment.
      */
     readOnlyHint: boolean;
+    conditions?: string[];
   };
   schema: Schema;
   handler: (
@@ -76,6 +77,7 @@ export interface Response {
   attachConsoleMessage(msgid: number): void;
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
+  setTabId(tabId: string): void;
 }
 
 /**

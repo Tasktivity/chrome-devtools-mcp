@@ -55,6 +55,7 @@ export async function withBrowser(
     devtools: options.autoOpenDevTools ?? false,
     pipe: true,
     handleDevToolsAsPage: true,
+    args: ['--screen-info={3840x2160}'],
   };
   const key = JSON.stringify(launchOptions);
 
@@ -100,6 +101,7 @@ export async function withMcpContext(
 
 export function getMockRequest(
   options: {
+    url?: string;
     method?: string;
     response?: HTTPResponse;
     failure?: HTTPRequest['failure'];
@@ -110,11 +112,12 @@ export function getMockRequest(
     stableId?: number;
     navigationRequest?: boolean;
     frame?: Frame;
+    redirectChain?: HTTPRequest[];
   } = {},
 ): HTTPRequest {
   return {
     url() {
-      return 'http://example.com';
+      return options.url ?? 'http://example.com';
     },
     method() {
       return options.method ?? 'GET';
@@ -143,7 +146,7 @@ export function getMockRequest(
       };
     },
     redirectChain(): HTTPRequest[] {
-      return [];
+      return options.redirectChain ?? [];
     },
     isNavigationRequest() {
       return options.navigationRequest ?? false;
@@ -163,6 +166,9 @@ export function getMockResponse(
   return {
     status() {
       return options.status ?? 200;
+    },
+    headers(): Record<string, string> {
+      return {};
     },
   } as HTTPResponse;
 }
@@ -186,6 +192,27 @@ export function html(
     ${bodyContent}
   </body>
 </html>`;
+}
+
+export function stabilizeStructuredContent(content: unknown): unknown {
+  if (typeof content === 'string') {
+    return stabilizeResponseOutput(content);
+  }
+  if (Array.isArray(content)) {
+    return content.map(item => stabilizeStructuredContent(item));
+  }
+  if (typeof content === 'object' && content !== null) {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(content)) {
+      if (key === 'snapshotFilePath' && typeof value === 'string') {
+        result[key] = '<file>';
+      } else {
+        result[key] = stabilizeStructuredContent(value);
+      }
+    }
+    return result;
+  }
+  return content;
 }
 
 export function stabilizeResponseOutput(text: unknown) {

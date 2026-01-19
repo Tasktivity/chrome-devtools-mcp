@@ -211,6 +211,22 @@ export const resizePage = defineTool({
   handler: async (request, response, context) => {
     const page = context.getSelectedPage();
 
+    try {
+      const browser = page.browser();
+      const windowId = await page.windowId();
+
+      const bounds = await browser.getWindowBounds(windowId);
+
+      if (bounds.windowState === 'fullscreen') {
+        // Have to call this twice on Ubuntu when the window is in fullscreen mode.
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+      } else if (bounds.windowState !== 'normal') {
+        await browser.setWindowBounds(windowId, {windowState: 'normal'});
+      }
+    } catch {
+      // Window APIs are not supported on all platforms
+    }
     await page.resize({
       contentWidth: request.params.width,
       contentHeight: request.params.height,
@@ -267,5 +283,28 @@ export const handleDialog = defineTool({
 
     context.clearDialog();
     response.setIncludePages(true);
+  },
+});
+
+export const getTabId = defineTool({
+  name: 'get_tab_id',
+  description: `Get the tab ID of the page`,
+  annotations: {
+    category: ToolCategory.NAVIGATION,
+    readOnlyHint: true,
+    conditions: ['experimentalInteropTools'],
+  },
+  schema: {
+    pageId: zod
+      .number()
+      .describe(
+        `The ID of the page to get the tab ID for. Call ${listPages.name} to get available pages.`,
+      ),
+  },
+  handler: async (request, response, context) => {
+    const page = context.getPageById(request.params.pageId);
+    // @ts-expect-error _tabId is internal.
+    const tabId = page._tabId;
+    response.setTabId(tabId);
   },
 });
