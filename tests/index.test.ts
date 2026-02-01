@@ -110,14 +110,14 @@ describe('e2e', () => {
     });
   });
 
-  it('has experimental extensions tools', async () => {
+  it('has extensions tools when enabled', async () => {
     await withClient(
       async client => {
         const {tools} = await client.listTools();
-        const clickAt = tools.find(t => t.name === 'install_extension');
-        assert.ok(clickAt);
+        const installExtension = tools.find(t => t.name === 'install_extension');
+        assert.ok(installExtension);
       },
-      ['--category-extensions'],
+      ['--enable-extensions'],
     );
   });
 

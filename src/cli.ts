@@ -202,13 +202,7 @@ export const cliOptions = {
     type: 'boolean',
     default: false,
     describe:
-      'Enable extension debugging support. When enabled, extension contexts (sidepanels, popups, service workers) will be visible and interactable.',
-  },
-  categoryExtensions: {
-    type: 'boolean',
-    default: false,
-    hidden: true,
-    describe: 'Set to false to exclude tools related to extensions.',
+      'Enable extension debugging support. When enabled, extension tools and contexts (sidepanels, popups, service workers) will be visible and interactable.',
   },
   usageStatistics: {
     type: 'boolean',

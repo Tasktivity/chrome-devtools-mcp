@@ -9,15 +9,12 @@ import {zod} from '../third_party/index.js';
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
 
-const EXTENSIONS_CONDITION = 'experimentalExtensionSupport';
-
 export const installExtension = defineTool({
   name: 'install_extension',
   description: 'Installs a Chrome extension from the given path.',
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: false,
-    conditions: [EXTENSIONS_CONDITION],
   },
   schema: {
     path: zod
@@ -37,7 +34,6 @@ export const uninstallExtension = defineTool({
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: false,
-    conditions: [EXTENSIONS_CONDITION],
   },
   schema: {
     id: zod.string().describe('ID of the extension to uninstall.'),
@@ -52,11 +48,10 @@ export const uninstallExtension = defineTool({
 export const listExtensions = defineTool({
   name: 'list_extensions',
   description:
-    'Lists all extensions via this server, including their name, ID, version, and enabled status.',
+    'Lists all extensions installed via this server, including their name, ID, version, and path.',
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: true,
-    conditions: [EXTENSIONS_CONDITION],
   },
   schema: {},
   handler: async (_request, response, _context) => {
@@ -70,7 +65,6 @@ export const reloadExtension = defineTool({
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: false,
-    conditions: [EXTENSIONS_CONDITION],
   },
   schema: {
     id: zod.string().describe('ID of the extension to reload.'),
@@ -95,7 +89,7 @@ with identical code execution to docked mode. Only visual docking/layout differs
 
 After opening, use list_pages to see the sidepanel and select_page to interact with it.`,
   annotations: {
-    category: ToolCategory.DEBUGGING,
+    category: ToolCategory.EXTENSIONS,
     readOnlyHint: false,
   },
   schema: {

@@ -373,13 +373,18 @@ If you run into any issues, checkout our [troubleshooting guide](./docs/troubles
 - **Network** (2 tools)
   - [`get_network_request`](docs/tool-reference.md#get_network_request)
   - [`list_network_requests`](docs/tool-reference.md#list_network_requests)
-- **Debugging** (6 tools)
+- **Debugging** (5 tools)
   - [`evaluate_script`](docs/tool-reference.md#evaluate_script)
   - [`get_console_message`](docs/tool-reference.md#get_console_message)
   - [`list_console_messages`](docs/tool-reference.md#list_console_messages)
-  - [`open_extension_sidepanel`](docs/tool-reference.md#open_extension_sidepanel)
   - [`take_screenshot`](docs/tool-reference.md#take_screenshot)
   - [`take_snapshot`](docs/tool-reference.md#take_snapshot)
+- **Extensions** (5 tools) - requires `--enableExtensions` flag
+  - [`install_extension`](docs/tool-reference.md#install_extension)
+  - [`list_extensions`](docs/tool-reference.md#list_extensions)
+  - [`open_extension_sidepanel`](docs/tool-reference.md#open_extension_sidepanel)
+  - [`reload_extension`](docs/tool-reference.md#reload_extension)
+  - [`uninstall_extension`](docs/tool-reference.md#uninstall_extension)
 
 <!-- END AUTO GENERATED TOOLS -->
 
