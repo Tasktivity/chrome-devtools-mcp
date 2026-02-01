@@ -9,7 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {isExtensionDebuggingEnabled} from './browser.js';
-import {extractUrlLikeFromDevToolsTitle, urlsEqual} from './DevtoolsUtils.js';
+import type {TargetUniverse} from './DevtoolsUtils.js';
+import {
+  extractUrlLikeFromDevToolsTitle,
+  UniverseManager,
+  urlsEqual,
+} from './DevtoolsUtils.js';
 import type {ListenerMap} from './PageCollector.js';
 import {NetworkCollector, ConsoleCollector} from './PageCollector.js';
 import {Locator} from './third_party/index.js';
@@ -25,17 +30,23 @@ import type {
   SerializedAXNode,
   PredefinedNetworkConditions,
   Target,
+  Viewport,
 } from './third_party/index.js';
 import {listPages} from './tools/pages.js';
 import {takeSnapshot} from './tools/snapshot.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
 import type {Context, DevToolsData} from './tools/ToolDefinition.js';
 import type {TraceResult} from './trace-processing/parse.js';
+import {
+  ExtensionRegistry,
+  type InstalledExtension,
+} from './utils/ExtensionRegistry.js';
 import {WaitForHelper} from './WaitForHelper.js';
 
 export interface TextSnapshotNode extends SerializedAXNode {
   id: string;
   backendNodeId?: number;
+  loaderId?: string;
   children: TextSnapshotNode[];
 }
 
@@ -119,11 +130,16 @@ export class McpContext implements Context {
   #textSnapshot: TextSnapshot | null = null;
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
+  #devtoolsUniverseManager: UniverseManager;
+  #extensionRegistry = new ExtensionRegistry();
 
   #isRunningTrace = false;
   #networkConditionsMap = new WeakMap<Page, string>();
   #cpuThrottlingRateMap = new WeakMap<Page, number>();
   #geolocationMap = new WeakMap<Page, GeolocationOptions>();
+  #viewportMap = new WeakMap<Page, Viewport>();
+  #userAgentMap = new WeakMap<Page, string>();
+  #colorSchemeMap = new WeakMap<Page, 'dark' | 'light'>();
   #dialog?: Dialog;
 
   #pageIdMap = new WeakMap<Page, number>();
@@ -134,6 +150,8 @@ export class McpContext implements Context {
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
+
+  #uniqueBackendNodeIdToMcpId = new Map<string, string>();
 
   private constructor(
     browser: Browser,
@@ -167,17 +185,20 @@ export class McpContext implements Context {
         },
       } as ListenerMap;
     });
+    this.#devtoolsUniverseManager = new UniverseManager(this.browser);
   }
 
   async #init() {
     const pages = await this.createPagesSnapshot();
     await this.#networkCollector.init(pages);
     await this.#consoleCollector.init(pages);
+    await this.#devtoolsUniverseManager.init(pages);
   }
 
   dispose() {
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
+    this.#devtoolsUniverseManager.dispose();
   }
 
   static async from(
@@ -244,6 +265,10 @@ export class McpContext implements Context {
     return this.#consoleCollector.getData(page, includePreservedMessages);
   }
 
+  getDevToolsUniverse(): TargetUniverse | null {
+    return this.#devtoolsUniverseManager.get(this.getSelectedPage());
+  }
+
   getConsoleMessageStableId(
     message: ConsoleMessage | Error | DevTools.AggregatedIssue,
   ): number {
@@ -256,8 +281,8 @@ export class McpContext implements Context {
     return this.#consoleCollector.getById(this.getSelectedPage(), id);
   }
 
-  async newPage(): Promise<Page> {
-    const page = await this.browser.newPage();
+  async newPage(background?: boolean): Promise<Page> {
+    const page = await this.browser.newPage({background});
     await this.createPagesSnapshot();
     this.selectPage(page);
     this.#networkCollector.addPage(page);
@@ -314,6 +339,48 @@ export class McpContext implements Context {
   getGeolocation(): GeolocationOptions | null {
     const page = this.getSelectedPage();
     return this.#geolocationMap.get(page) ?? null;
+  }
+
+  setViewport(viewport: Viewport | null): void {
+    const page = this.getSelectedPage();
+    if (viewport === null) {
+      this.#viewportMap.delete(page);
+    } else {
+      this.#viewportMap.set(page, viewport);
+    }
+  }
+
+  getViewport(): Viewport | null {
+    const page = this.getSelectedPage();
+    return this.#viewportMap.get(page) ?? null;
+  }
+
+  setUserAgent(userAgent: string | null): void {
+    const page = this.getSelectedPage();
+    if (userAgent === null) {
+      this.#userAgentMap.delete(page);
+    } else {
+      this.#userAgentMap.set(page, userAgent);
+    }
+  }
+
+  getUserAgent(): string | null {
+    const page = this.getSelectedPage();
+    return this.#userAgentMap.get(page) ?? null;
+  }
+
+  setColorScheme(scheme: 'dark' | 'light' | null): void {
+    const page = this.getSelectedPage();
+    if (scheme === null) {
+      this.#colorSchemeMap.delete(page);
+    } else {
+      this.#colorSchemeMap.set(page, scheme);
+    }
+  }
+
+  getColorScheme(): 'dark' | 'light' | null {
+    const page = this.getSelectedPage();
+    return this.#colorSchemeMap.get(page) ?? null;
   }
 
   setIsRunningPerformanceTrace(x: boolean): void {
@@ -411,23 +478,22 @@ export class McpContext implements Context {
         `No snapshot found. Use ${takeSnapshot.name} to capture one.`,
       );
     }
-    const [snapshotId] = uid.split('_');
-
-    if (this.#textSnapshot.snapshotId !== snapshotId) {
-      throw new Error(
-        'This uid is coming from a stale snapshot. Call take_snapshot to get a fresh snapshot.',
-      );
-    }
-
     const node = this.#textSnapshot?.idToNode.get(uid);
     if (!node) {
-      throw new Error('No such element found in the snapshot');
+      throw new Error('No such element found in the snapshot.');
     }
-    const handle = await node.elementHandle();
-    if (!handle) {
-      throw new Error('No such element found in the snapshot');
+    const message = `Element with uid ${uid} no longer exists on the page.`;
+    try {
+      const handle = await node.elementHandle();
+      if (!handle) {
+        throw new Error(message);
+      }
+      return handle;
+    } catch (error) {
+      throw new Error(message, {
+        cause: error,
+      });
     }
-    return handle;
   }
 
   /**
@@ -658,10 +724,24 @@ export class McpContext implements Context {
     // will be used for the tree serialization and mapping ids back to nodes.
     let idCounter = 0;
     const idToNode = new Map<string, TextSnapshotNode>();
+    const seenUniqueIds = new Set<string>();
     const assignIds = (node: SerializedAXNode): TextSnapshotNode => {
+      let id = '';
+      // @ts-expect-error untyped loaderId & backendNodeId.
+      const uniqueBackendId = `${node.loaderId}_${node.backendNodeId}`;
+      if (this.#uniqueBackendNodeIdToMcpId.has(uniqueBackendId)) {
+        // Re-use MCP exposed ID if the uniqueId is the same.
+        id = this.#uniqueBackendNodeIdToMcpId.get(uniqueBackendId)!;
+      } else {
+        // Only generate a new ID if we have not seen the node before.
+        id = `${snapshotId}_${idCounter++}`;
+        this.#uniqueBackendNodeIdToMcpId.set(uniqueBackendId, id);
+      }
+      seenUniqueIds.add(uniqueBackendId);
+
       const nodeWithId: TextSnapshotNode = {
         ...node,
-        id: `${snapshotId}_${idCounter++}`,
+        id,
         children: node.children
           ? node.children.map(child => assignIds(child))
           : [],
@@ -694,6 +774,13 @@ export class McpContext implements Context {
       this.#textSnapshot.selectedElementUid = this.resolveCdpElementId(
         data?.cdpBackendNodeId,
       );
+    }
+
+    // Clean up unique IDs that we did not see anymore.
+    for (const key of this.#uniqueBackendNodeIdToMcpId.keys()) {
+      if (!seenUniqueIds.has(key)) {
+        this.#uniqueBackendNodeIdToMcpId.delete(key);
+      }
     }
   }
 
@@ -736,6 +823,8 @@ export class McpContext implements Context {
   }
 
   storeTraceRecording(result: TraceResult): void {
+    // Clear the trace results because we only consume the latest trace currently.
+    this.#traceResults = [];
     this.#traceResults.push(result);
   }
 
@@ -751,7 +840,10 @@ export class McpContext implements Context {
     return new WaitForHelper(page, cpuMultiplier, networkMultiplier);
   }
 
-  waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void> {
+  waitForEventsAfterAction(
+    action: () => Promise<unknown>,
+    options?: {timeout?: number},
+  ): Promise<void> {
     const page = this.getSelectedPage();
     const cpuMultiplier = this.getCpuThrottlingRate();
     const networkMultiplier = getNetworkMultiplierFromString(
@@ -762,7 +854,7 @@ export class McpContext implements Context {
       cpuMultiplier,
       networkMultiplier,
     );
-    return waitForHelper.waitForEventsAfterAction(action);
+    return waitForHelper.waitForEventsAfterAction(action, options);
   }
 
   getNetworkRequestStableId(request: HTTPRequest): number {
@@ -802,5 +894,24 @@ export class McpContext implements Context {
       } as ListenerMap;
     });
     await this.#networkCollector.init(await this.browser.pages());
+  }
+
+  async installExtension(extensionPath: string): Promise<string> {
+    const id = await this.browser.installExtension(extensionPath);
+    await this.#extensionRegistry.registerExtension(id, extensionPath);
+    return id;
+  }
+
+  async uninstallExtension(id: string): Promise<void> {
+    await this.browser.uninstallExtension(id);
+    this.#extensionRegistry.remove(id);
+  }
+
+  listExtensions(): InstalledExtension[] {
+    return this.#extensionRegistry.list();
+  }
+
+  getExtension(id: string): InstalledExtension | undefined {
+    return this.#extensionRegistry.getById(id);
   }
 }

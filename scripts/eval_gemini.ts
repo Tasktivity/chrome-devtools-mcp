@@ -8,11 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {parseArgs} from 'node:util';
 
-import {
-  GoogleGenerativeAI,
-  type FunctionDeclaration,
-  SchemaType,
-} from '@google/generative-ai';
+import {GoogleGenAI, mcpToTool} from '@google/genai';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -20,6 +16,7 @@ import {TestServer} from '../build/tests/server.js';
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '..');
 const SCENARIOS_DIR = path.join(import.meta.dirname, 'eval_scenarios');
+const SKILL_PATH = path.join(ROOT_DIR, 'skills', 'chrome-devtools', 'SKILL.md');
 
 // Define schema for our test scenarios
 export interface CapturedFunctionCall {
@@ -47,43 +44,13 @@ async function loadScenario(scenarioPath: string): Promise<TestScenario> {
   return module.scenario;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
-const cleanSchemaRecursive = (schema: unknown): unknown => {
-  if (!isRecord(schema)) {
-    return schema;
-  }
-
-  const out: Record<string, unknown> = {};
-  for (const key in schema) {
-    if (
-      key === 'default' ||
-      key === 'additionalProperties' ||
-      key === 'exclusiveMinimum'
-    ) {
-      continue;
-    }
-
-    const value = schema[key];
-    if (Array.isArray(value)) {
-      out[key] = value.map(cleanSchemaRecursive);
-    } else if (isRecord(value)) {
-      out[key] = cleanSchemaRecursive(value);
-    } else {
-      out[key] = value;
-    }
-  }
-  return out;
-};
-
 async function runSingleScenario(
   scenarioPath: string,
   apiKey: string,
   server: TestServer,
   modelId: string,
   debug: boolean,
+  includeSkill: boolean,
 ): Promise<void> {
   const debugLog = (...args: unknown[]) => {
     if (debug) {
@@ -99,7 +66,23 @@ async function runSingleScenario(
   let transport: StdioClientTransport | undefined;
 
   try {
-    const scenario = await loadScenario(absolutePath);
+    const loadedScenario = await loadScenario(absolutePath);
+    const scenario = {...loadedScenario};
+
+    // Prepend skill content if requested
+    if (includeSkill) {
+      if (!fs.existsSync(SKILL_PATH)) {
+        throw new Error(
+          `Skill file not found at ${SKILL_PATH}. Please ensure the skill file exists.`,
+        );
+      }
+      const skillContent = fs.readFileSync(SKILL_PATH, 'utf-8');
+      scenario.prompt = `${skillContent}\n\n---\n\n${scenario.prompt}`;
+    }
+
+    // Append random queryid to avoid caching issues and test distinct runs
+    const randomId = Math.floor(Math.random() * 1000000);
+    scenario.prompt = `${scenario.prompt}\nqueryid=${randomId}`;
 
     if (scenario.htmlRoute) {
       server.addHtmlRoute(
@@ -147,137 +130,46 @@ async function runSingleScenario(
 
     await client.connect(transport);
 
-    const toolsResult = await client.listTools();
-    const mcpTools = toolsResult.tools;
+    const allCalls: CapturedFunctionCall[] = [];
+    const originalCallTool = client.callTool.bind(client);
+    client.callTool = async (request, schema) => {
+      // NOTE: request.name is the original name as the MCP client sees it.
+      // mcpToTool handles the conversion from Gemini sanitized name to original name.
+      debugLog(
+        `Executing tool: ${request.name} with args: ${JSON.stringify(request.arguments)}`,
+      );
+      allCalls.push({
+        name: request.name,
+        args: (request.arguments as Record<string, unknown>) || {},
+      });
+      return originalCallTool(request, schema);
+    };
 
-    // Convert MCP tools to Gemini function declarations
-    const functionDeclarations: FunctionDeclaration[] = mcpTools.map(tool => ({
-      name: tool.name.replace(/-/g, '_').replace(/\./g, '_'), // Sanitize name for Gemini
-      description: tool.description?.substring(0, 1024) || '',
-      parameters: cleanSchemaRecursive({
-        type: SchemaType.OBJECT,
-        properties:
-          isRecord(tool.inputSchema) && 'properties' in tool.inputSchema
-            ? tool.inputSchema.properties
-            : {},
-        required:
-          isRecord(tool.inputSchema) &&
-          'required' in tool.inputSchema &&
-          Array.isArray(tool.inputSchema.required)
-            ? tool.inputSchema.required
-            : [],
-      }) as FunctionDeclaration['parameters'],
-    }));
+    const ai = new GoogleGenAI({apiKey});
 
-    // Keep a map of sanitized names to original names for execution
-    const contentToolsMap = new Map<string, string>();
-    for (const tool of mcpTools) {
-      const sanitized = tool.name.replace(/-/g, '_').replace(/\./g, '_');
-      contentToolsMap.set(sanitized, tool.name);
-    }
+    debugLog(`\n--- Prompt ---\n${scenario.prompt}`);
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({
+    const result = await ai.models.generateContent({
       model: modelId,
-      tools: [{functionDeclarations}],
-    });
-
-    const chat = model.startChat({
-      systemInstruction: {
-        role: 'system',
-        parts: [{text: `Use available tools.`}],
+      contents: scenario.prompt,
+      config: {
+        tools: [mcpToTool(client)],
+        automaticFunctionCalling: {
+          maximumRemoteCalls: scenario.maxTurns,
+        },
       },
     });
 
-    const expectations = scenario.expectations;
-    const allCalls: CapturedFunctionCall[] = [];
-
-    // Execute turns
-    let turnCount = 0;
-    debugLog(`\n--- Turn 1 (User) ---`);
-    debugLog(scenario.prompt);
-
-    let result = await chat.sendMessage(scenario.prompt, {
-      timeout: 5000,
-    });
-    let response = result.response;
-
-    while (turnCount < scenario.maxTurns) {
-      turnCount++;
-      debugLog(`\n--- Turn ${turnCount} (Model) ---`);
-      const text = response.text();
-      if (text) {
-        debugLog(`Text: ${text}`);
-      }
-
-      const functionCalls = response.functionCalls();
-      if (functionCalls && functionCalls.length > 0) {
-        debugLog(`Function Calls: ${JSON.stringify(functionCalls, null, 2)}`);
-
-        const functionResponses = [];
-        for (const call of functionCalls) {
-          const originalName = contentToolsMap.get(call.name);
-          if (!originalName) {
-            console.error(`Unknown tool called: ${call.name}`);
-            functionResponses.push({
-              functionResponse: {
-                name: call.name,
-                response: {error: `Unknown tool: ${call.name}`},
-              },
-            });
-            continue;
-          }
-
-          const safeArgs = isRecord(call.args) ? call.args : {};
-
-          debugLog(
-            `Executing tool: ${originalName} with args: ${JSON.stringify(call.args)}`,
-          );
-
-          allCalls.push({
-            name: originalName,
-            args: safeArgs,
-          });
-
-          try {
-            const toolResult = await client.callTool({
-              name: originalName,
-              arguments: safeArgs,
-            });
-
-            functionResponses.push({
-              functionResponse: {
-                name: call.name,
-                response: {name: call.name, content: toolResult},
-              },
-            });
-          } catch (e) {
-            const errorMessage = e instanceof Error ? e.message : String(e);
-            console.error(`Error executing tool ${originalName}:`, e);
-            functionResponses.push({
-              functionResponse: {
-                name: call.name,
-                response: {error: errorMessage},
-              },
-            });
-          }
-        }
-
-        // Send tool results back
-        debugLog(`Sending ${functionResponses.length} tool outputs back...`);
-        result = await chat.sendMessage(functionResponses);
-        response = result.response;
-      } else {
-        debugLog('No tool calls. Interaction finished.');
-        break;
-      }
-    }
+    debugLog(`\n--- Response ---\n${result.text}`);
 
     debugLog('\nVerifying expectations...');
-    expectations(allCalls);
+    scenario.expectations(allCalls);
   } finally {
-    await client?.close();
-    await transport?.close();
+    try {
+      await client?.close();
+    } catch (e) {
+      console.error('Error closing client:', e);
+    }
   }
 }
 
@@ -297,12 +189,23 @@ async function main() {
         type: 'boolean',
         default: false,
       },
+      repeat: {
+        type: 'boolean',
+        default: false,
+      },
+      'include-skill': {
+        type: 'boolean',
+        default: false,
+      },
     },
     allowPositionals: true,
   });
 
   const modelId = values.model;
   const debug = values.debug;
+  const repeat = values.repeat;
+  const includeSkill = values['include-skill'];
+
   const scenarioFiles =
     positionals.length > 0
       ? positionals.map(p => path.resolve(p))
@@ -319,16 +222,32 @@ async function main() {
 
   try {
     for (const scenarioPath of scenarioFiles) {
-      try {
-        await runSingleScenario(scenarioPath, apiKey, server, modelId, debug);
-        console.log(`✔ ${path.relative(ROOT_DIR, scenarioPath)}`);
-        successCount++;
-      } catch (e) {
-        console.error(`✖ ${path.relative(ROOT_DIR, scenarioPath)}`);
-        console.error(e);
-        failureCount++;
-      } finally {
-        server.restore();
+      for (let i = 1; i <= (repeat ? 3 : 1); i++) {
+        try {
+          if (debug) {
+            console.log(
+              `Running scenario: ${path.relative(ROOT_DIR, scenarioPath)} (Run ${i}/3)`,
+            );
+          }
+          await runSingleScenario(
+            scenarioPath,
+            apiKey,
+            server,
+            modelId,
+            debug,
+            includeSkill,
+          );
+          console.log(`✔ ${path.relative(ROOT_DIR, scenarioPath)} (Run ${i})`);
+          successCount++;
+        } catch (e) {
+          console.error(
+            `✖ ${path.relative(ROOT_DIR, scenarioPath)} (Run ${i})`,
+          );
+          console.error(e);
+          failureCount++;
+        } finally {
+          server.restore();
+        }
       }
     }
   } finally {

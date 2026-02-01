@@ -13,7 +13,10 @@ export interface ChromeDevToolsMcpExtension {
   tool_invocation?: ToolInvocation;
   server_start?: ServerStart;
   daily_active?: DailyActive;
+  server_shutdown?: ServerShutdown;
 }
+
+export type ServerShutdown = Record<string, never>;
 
 export interface ToolInvocation {
   tool_name: string;
@@ -44,6 +47,14 @@ export interface LogRequest {
   }>;
 }
 
+export interface LogResponse {
+  /**
+   * If present, the client must wait this many milliseconds before
+   * issuing the next HTTP request.
+   */
+  next_request_wait_millis?: number;
+}
+
 // Enums
 export enum OsType {
   OS_TYPE_UNSPECIFIED = 0,
@@ -64,4 +75,15 @@ export enum McpClient {
   MCP_CLIENT_UNSPECIFIED = 0,
   MCP_CLIENT_CLAUDE_CODE = 1,
   MCP_CLIENT_GEMINI_CLI = 2,
+}
+
+// IPC types for messages between the main process and the
+// telemetry watchdog process.
+export enum WatchdogMessageType {
+  LOG_EVENT = 'log-event',
+}
+
+export interface WatchdogMessage {
+  type: WatchdogMessageType.LOG_EVENT;
+  payload: ChromeDevToolsMcpExtension;
 }

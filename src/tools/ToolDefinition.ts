@@ -6,8 +6,14 @@
 
 import type {TextSnapshotNode, GeolocationOptions, OpenSidepanelResult} from '../McpContext.js';
 import {zod} from '../third_party/index.js';
-import type {Dialog, ElementHandle, Page} from '../third_party/index.js';
-import type {TraceResult} from '../trace-processing/parse.js';
+import type {
+  Dialog,
+  ElementHandle,
+  Page,
+  Viewport,
+} from '../third_party/index.js';
+import type {InsightName, TraceResult} from '../trace-processing/parse.js';
+import type {InstalledExtension} from '../utils/ExtensionRegistry.js';
 import type {PaginationOptions} from '../utils/types.js';
 
 import type {ToolCategory} from './categories.js';
@@ -73,11 +79,21 @@ export interface Response {
   ): void;
   includeSnapshot(params?: SnapshotParams): void;
   attachImage(value: ImageContentData): void;
-  attachNetworkRequest(reqid: number): void;
+  attachNetworkRequest(
+    reqid: number,
+    options?: {requestFilePath?: string; responseFilePath?: string},
+  ): void;
   attachConsoleMessage(msgid: number): void;
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
   setTabId(tabId: string): void;
+  attachTraceSummary(trace: TraceResult): void;
+  attachTraceInsight(
+    trace: TraceResult,
+    insightSetId: string,
+    insightName: InsightName,
+  ): void;
+  setListExtensions(): void;
 }
 
 /**
@@ -94,7 +110,7 @@ export type Context = Readonly<{
   getPageById(pageId: number): Page;
   getPageId(page: Page): number | undefined;
   isPageSelected(page: Page): boolean;
-  newPage(): Promise<Page>;
+  newPage(background?: boolean): Promise<Page>;
   closePage(pageId: number): Promise<void>;
   selectPage(page: Page): void;
   getElementByUid(uid: string): Promise<ElementHandle<Element>>;
@@ -102,6 +118,11 @@ export type Context = Readonly<{
   setNetworkConditions(conditions: string | null): void;
   setCpuThrottlingRate(rate: number): void;
   setGeolocation(geolocation: GeolocationOptions | null): void;
+  setViewport(viewport: Viewport | null): void;
+  getViewport(): Viewport | null;
+  setUserAgent(userAgent: string | null): void;
+  getUserAgent(): string | null;
+  setColorScheme(scheme: 'dark' | 'light' | null): void;
   saveTemporaryFile(
     data: Uint8Array<ArrayBufferLike>,
     mimeType: 'image/png' | 'image/jpeg' | 'image/webp',
@@ -110,7 +131,10 @@ export type Context = Readonly<{
     data: Uint8Array<ArrayBufferLike>,
     filename: string,
   ): Promise<{filename: string}>;
-  waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void>;
+  waitForEventsAfterAction(
+    action: () => Promise<unknown>,
+    options?: {timeout?: number},
+  ): Promise<void>;
   waitForTextOnPage(text: string, timeout?: number): Promise<Element>;
   getDevToolsData(): Promise<DevToolsData>;
   /**
@@ -125,6 +149,10 @@ export type Context = Readonly<{
    * Opens an extension's sidepanel in a detached popup window.
    */
   openExtensionSidepanel(extensionId: string): Promise<OpenSidepanelResult>;
+  installExtension(path: string): Promise<string>;
+  uninstallExtension(id: string): Promise<void>;
+  listExtensions(): InstalledExtension[];
+  getExtension(id: string): InstalledExtension | undefined;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

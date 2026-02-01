@@ -27,6 +27,22 @@ allowing them to inspect, debug, and modify any data in the browser or DevTools.
 Avoid sharing sensitive or personal information that you don't want to share with
 MCP clients.
 
+## **Usage statistics**
+
+Google collects usage statistics (such as tool invocation success rates, latency, and environment information) to improve the reliability and performance of Chrome DevTools MCP.
+
+Data collection is **enabled by default**. You can opt-out by passing the `--no-usage-statistics` flag when starting the server:
+
+```json
+"args": ["-y", "chrome-devtools-mcp@latest", "--no-usage-statistics"]
+```
+
+Google handles this data in accordance with the [Google Privacy Policy](https://policies.google.com/privacy).
+
+Google's collection of usage statistics for Chrome DevTools MCP is independent from the Chrome browser's usage statistics. Opting out of Chrome metrics does not automatically opt you out of this tool, and vice-versa.
+
+Collection is disabled if CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS or CI env variables are set.
+
 ## Requirements
 
 - [Node.js](https://nodejs.org/) v20.19 or a newer [latest maintenance LTS](https://github.com/nodejs/Release#release-schedule) version.
@@ -66,7 +82,7 @@ amp mcp add chrome-devtools -- npx chrome-devtools-mcp@latest
 <details>
   <summary>Antigravity</summary>
 
-To use the Chrome DevTools MCP server follow the instructions from <a href="https://antigravity.google/docs/mcp">Antigravity's docs<a/> to install a custom MCP server. Add the following config to the MCP servers config:
+To use the Chrome DevTools MCP server follow the instructions from <a href="https://antigravity.google/docs/mcp">Antigravity's docs</a> to install a custom MCP server. Add the following config to the MCP servers config:
 
 ```bash
 {
@@ -205,7 +221,10 @@ Install the Chrome DevTools MCP server using the Gemini CLI.
 **Project wide:**
 
 ```bash
+# Either MCP only:
 gemini mcp add chrome-devtools npx chrome-devtools-mcp@latest
+# Or as a Gemini extension (MCP+Skills):
+gemini extensions install --auto-update https://github.com/ChromeDevTools/chrome-devtools-mcp
 ```
 
 **Globally:**
@@ -452,6 +471,11 @@ The Chrome DevTools MCP server supports the following configuration option:
   Enable extension debugging support. When enabled, extension contexts (sidepanels, popups, service workers) will be visible and interactable.
   - **Type:** boolean
   - **Default:** `false`
+
+- **`--usageStatistics`/ `--usage-statistics`**
+  Set to false to opt-out of usage statistics collection. Google collects usage data to improve the tool, handled under the Google Privacy Policy (https://policies.google.com/privacy). This is independent from Chrome browser metrics. Disabled if CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS or CI env variables are set.
+  - **Type:** boolean
+  - **Default:** `true`
 
 <!-- END AUTO GENERATED OPTIONS -->
 

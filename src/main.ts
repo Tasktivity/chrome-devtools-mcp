@@ -22,6 +22,7 @@ import {McpResponse} from './McpResponse.js';
 import {Mutex} from './Mutex.js';
 import {ClearcutLogger} from './telemetry/clearcut-logger.js';
 import {computeFlagUsage} from './telemetry/flag-utils.js';
+import {bucketizeLatency} from './telemetry/metric-utils.js';
 import {
   McpServer,
   StdioServerTransport,
@@ -34,7 +35,7 @@ import {tools} from './tools/tools.js';
 
 // If moved update release-please config
 // x-release-please-start-version
-const VERSION = '0.13.0';
+const VERSION = '0.15.1';
 // x-release-please-end
 
 export const args = parseArguments(VERSION);
@@ -46,9 +47,25 @@ if (args.enableExtensions) {
 }
 
 const logFile = args.logFile ? saveLogsToFile(args.logFile) : undefined;
+if (
+  process.env['CI'] ||
+  process.env['CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS']
+) {
+  console.error(
+    "turning off usage statistics. process.env['CI'] || process.env['CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS'] is set.",
+  );
+  args.usageStatistics = false;
+}
+
 let clearcutLogger: ClearcutLogger | undefined;
 if (args.usageStatistics) {
-  clearcutLogger = new ClearcutLogger();
+  clearcutLogger = new ClearcutLogger({
+    logFile: args.logFile,
+    appVersion: VERSION,
+    clearcutEndpoint: args.clearcutEndpoint,
+    clearcutForceFlushIntervalMs: args.clearcutForceFlushIntervalMs,
+    clearcutIncludePidHeader: args.clearcutIncludePidHeader,
+  });
 }
 
 process.on('unhandledRejection', (reason, promise) => {
@@ -101,6 +118,7 @@ async function getContext(): Promise<McpContext> {
           ignoreDefaultChromeArgs,
           acceptInsecureCerts: args.acceptInsecureCerts,
           devtools,
+          enableExtensions: args.categoryExtensions,
         });
 
   if (context?.browser !== browser) {
@@ -146,6 +164,12 @@ function registerTool(tool: ToolDefinition): void {
   if (
     tool.annotations.category === ToolCategory.NETWORK &&
     args.categoryNetwork === false
+  ) {
+    return;
+  }
+  if (
+    tool.annotations.category === ToolCategory.EXTENSIONS &&
+    args.categoryExtensions === false
   ) {
     return;
   }
@@ -221,7 +245,7 @@ function registerTool(tool: ToolDefinition): void {
         void clearcutLogger?.logToolInvocation({
           toolName: tool.name,
           success,
-          latencyMs: Date.now() - startTime,
+          latencyMs: bucketizeLatency(Date.now() - startTime),
         });
         guard.dispose();
       }

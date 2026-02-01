@@ -164,6 +164,7 @@ interface McpLaunchOptions {
   chromeArgs?: string[];
   ignoreDefaultChromeArgs?: string[];
   devtools: boolean;
+  enableExtensions?: boolean;
 }
 
 export async function launch(options: McpLaunchOptions): Promise<Browser> {
@@ -220,6 +221,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       ignoreDefaultArgs: ignoreDefaultArgs,
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
+      enableExtensions: options.enableExtensions,
     });
     if (options.logFile) {
       // FIXME: we are probably subscribing too late to catch startup logs. We
