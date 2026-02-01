@@ -48,7 +48,8 @@ export const uninstallExtension = defineTool({
 export const listExtensions = defineTool({
   name: 'list_extensions',
   description:
-    'Lists all extensions installed via this server, including their name, ID, version, and path.',
+    'Lists extensions installed via this server (using install_extension), including their name, ID, version, and path. ' +
+    'Note: Pre-installed browser extensions are not shown here. Use list_pages to see all extension service workers.',
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: true,
@@ -87,44 +88,30 @@ the sidepanel opens in a detached popup window rather than docked to the browser
 This provides full debugging capabilities (DOM inspection, console access, script evaluation)
 with identical code execution to docked mode. Only visual docking/layout differs.
 
+Requirements:
+- Extension must have a service worker running (check list_pages for service workers)
+- Extension must have side_panel.default_path in manifest.json
+
 After opening, use list_pages to see the sidepanel and select_page to interact with it.`,
   annotations: {
     category: ToolCategory.EXTENSIONS,
     readOnlyHint: false,
   },
   schema: {
-    extensionId: zod
+    id: zod
       .string()
       .describe(
-        'The ID of the extension whose sidepanel should be opened. ' +
-        'Find extension IDs at chrome://extensions or from list_pages service worker URLs.',
+        'The extension ID. Find IDs via list_pages (shown in Service Workers section) ' +
+        'or list_extensions (for extensions installed via this server).',
       ),
   },
   handler: async (request, response, context) => {
-    try {
-      const result = await context.openExtensionSidepanel(request.params.extensionId);
+    const result = await context.openExtensionSidepanel(request.params.id);
 
-      response.appendResponseLine(`# Sidepanel Opened Successfully`);
-      response.appendResponseLine('');
-      response.appendResponseLine(`**URL:** ${result.url}`);
-      response.appendResponseLine(`**Window ID:** ${result.windowId}`);
-      response.appendResponseLine('');
-      response.appendResponseLine(`> ${result.note}`);
-      response.appendResponseLine('');
-      response.appendResponseLine('Use `list_pages` to see the sidepanel and `select_page` to interact with it.');
+    response.appendResponseLine(`Sidepanel opened: ${result.url}`);
+    response.appendResponseLine('');
+    response.appendResponseLine(`> ${result.note}`);
 
-      response.setIncludePages(true);
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      response.appendResponseLine(`# Failed to Open Sidepanel`);
-      response.appendResponseLine('');
-      response.appendResponseLine(`**Error:** ${errorMessage}`);
-      response.appendResponseLine('');
-      response.appendResponseLine('**Troubleshooting:**');
-      response.appendResponseLine('- Ensure the extension is installed and enabled');
-      response.appendResponseLine('- Verify the extension has a `side_panel.default_path` in its manifest.json');
-      response.appendResponseLine('- Check that the extension has a service worker running');
-      response.appendResponseLine('- Use `list_pages` to see available service workers');
-    }
+    response.setIncludePages(true);
   },
 });

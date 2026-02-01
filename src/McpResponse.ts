@@ -442,6 +442,7 @@ export class McpResponse implements Response {
         defaultValue?: string;
       };
       pages?: object[];
+      serviceWorkers?: Array<{extensionId: string | null; url: string}>;
       pagination?: object;
     } = {};
 
@@ -518,9 +519,13 @@ Call ${handleDialog.name} to handle it before continuing.`);
       const serviceWorkers = context.getServiceWorkers();
       if (serviceWorkers.length > 0) {
         parts.push('');
-        parts.push('## Service Workers');
+        parts.push('## Service Workers (Extensions)');
         for (const sw of serviceWorkers) {
-          parts.push(`[service_worker] ${sw.url}`);
+          // Extract extension ID from chrome-extension://extensionId/...
+          const match = sw.url.match(/chrome-extension:\/\/([^/]+)/);
+          const extensionId = match ? match[1] : 'unknown';
+          parts.push(`- id: ${extensionId}`);
+          parts.push(`  url: ${sw.url}`);
         }
       }
 
@@ -532,6 +537,16 @@ Call ${handleDialog.name} to handle it before continuing.`);
           selected: context.isPageSelected(page),
         };
       });
+      // Include service workers in structured content with parsed extension IDs
+      if (serviceWorkers.length > 0) {
+        structuredContent.serviceWorkers = serviceWorkers.map(sw => {
+          const match = sw.url.match(/chrome-extension:\/\/([^/]+)/);
+          return {
+            extensionId: match ? match[1] : null,
+            url: sw.url,
+          };
+        });
+      }
     }
 
     if (this.#tabId) {
